@@ -1,3 +1,8 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import networkx as nx
+from collections import defaultdict
+
 class FiniteAutomaton:
     def __init__(self, states, alphabet, transitions, start_state, accept_states):
         self.states = states
@@ -19,103 +24,120 @@ class FiniteAutomaton:
         return True
 
     def to_regular_grammar(self):
-        # Initialize the production rules and start symbol of the grammar
-        productions = []
-        start_symbol = 'S'
-
-        # Add a production rule for each final state
-        for final_state in self.accept_states:
-            productions.append(start_symbol + " -> " + final_state + "\n")
-
-        # Add a production rule for each transition
-        for state in self.states:
-            for symbol in self.alphabet:
-                transitions = self.transitions[state][symbol]
-                for transition in transitions:
-                    productions.append(state + " -> " + symbol + transition + "\n")
-
-        # Remove duplicates and sort the production rules
-        productions = list(set(productions))
-        productions.sort()
-
-        # Create the regular grammar as a string
-        regular_grammar = start_symbol + " -> " + self.start_state + "\n"
-        for production in productions:
-            regular_grammar += production
-
-        return regular_grammar
+        rules = []
+        # Create a rule for each transition
+        for (state, symbol), next_state in self.transitions.items():
+            # If the transition goes to an accept state, add it to the RHS of the rule
+            if next_state in self.accept_states:
+                rhs = symbol
+            # Otherwise, add a new nonterminal symbol and create a rule to that symbol and the symbol on the RHS
+            else:
+                rhs = f"<{next_state}> {symbol}"
+                rules.append(f"<{next_state}> {'|'.join([symbol + f'<{s}>' for s in self.states if (next_state, s) in self.transitions.keys()])}")
+            # Add the new rule to the list of rules
+            rules.append(f"<{state}> {rhs}")
+        # Create the start symbol and add it to the rules
+        rules.append(f"S <{self.start_state}>")
+        # Join the list of rules and return them as a string
+        return "\n".join(rules)
 
     def is_deterministic(self):
-        for state in self.states:
+        # implementation of is_deterministic method
+        visited_states = set()
+        queue = [self.start_state]
+        while queue:
+            curr_state = queue.pop(0)
+            if curr_state in visited_states:
+                return False
+            visited_states.add(curr_state)
             for symbol in self.alphabet:
-                # check if there is more than one transition for the same symbol
-                if sum(1 for t in self.transitions[state] if t[0] == symbol) > 1:
+                next_states = set()
+                for state, trans_symbol in self.transitions.keys():
+                    if state == curr_state and trans_symbol == symbol:
+                        next_states.add(self.transitions[(state, trans_symbol)])
+                if len(next_states) != 1:
                     return False
+                queue.extend(next_states)
         return True
 
     def convert_to_dfa(self):
-        # Step 1: Create new start state s0
-        s0 = frozenset(self.epsilon_closure({self.start_state}))
+        """
+        Converts an NDFA to a DFA
+        """
+        # Set of states in the DFA
+        dfa_states = set()
+        # Dictionary representing the transition function of the DFA
+        dfa_transitions = {}
+        # Start state of the DFA
+        dfa_start_state = frozenset([self.start_state])
+        # Set of accept states in the DFA
+        dfa_accept_states = set()
+        # Queue for storing states to be processed
+        queue = [dfa_start_state]
 
-        # Step 2: Create new set of states with s0
-        new_states = {s0}
-
-        # Step 3: Create transitions for each symbol in the alphabet to a new DFA state
-        new_delta = {}
-        for state in new_states:
+        # Loop through states in the queue
+        while queue:
+            # Get the next state from the queue
+            state = queue.pop(0)
+            # Add the state to the set of DFA states
+            dfa_states.add(state)
+            # Check if the state contains an accept state from the NDFA
+            if any(s in self.accept_states for s in state):
+                dfa_accept_states.add(state)
+            # Loop through each symbol in the alphabet
             for symbol in self.alphabet:
-                # Find all the states that can be reached from the current state using the symbol
-                next_states = set()
+                # Get the set of states reachable from the current state with the current symbol
+                next_state = set()
                 for s in state:
                     if (s, symbol) in self.transitions:
-                        next_states |= set(self.transitions[(s, symbol)])
-                next_states = self.epsilon_closure(next_states)
+                        next_state.update(self.transitions[(s, symbol)])
+                # If the set of states is not empty
+                if next_state:
+                    # Convert the set of states to a single state name
+                    next_state_name = frozenset(next_state)
+                    # Add the transition to the DFA transition function
+                    dfa_transitions[(state, symbol)] = next_state_name
+                    # If the next state has not been processed, add it to the queue
+                    if next_state_name not in dfa_states:
+                        queue.append(next_state_name)
 
-                if not next_states:
-                    continue
+        # Create a new DFA object with the computed properties
+        dfa = FiniteAutomaton(states=dfa_states, alphabet=self.alphabet,
+                              transitions=dfa_transitions, start_state=dfa_start_state,
+                              accept_states=dfa_accept_states)
+        return dfa
 
-                # Create the new state and add it to the set of new states
-                new_state = frozenset(next_states)
-                new_states.add(new_state)
 
-                # Add the transition to the new delta
-                if state not in new_delta:
-                    new_delta[state] = {}
-                new_delta[state][symbol] = new_state
+    def render(self):
+        # Create a directed graph using networkx
+        G = nx.DiGraph()
 
-        # Step 4: Repeat step 3 until there are no more new states to add
-        dfa_states = {}
-        for i, state in enumerate(new_states):
-            dfa_states[state] = f"q{i}"
+        # Add nodes to the graph
+        for state in self.states:
+            G.add_node(state, shape='circle')
+        G.nodes[self.start_state]['shape'] = 'doublecircle'
+        for state in self.accept_states:
+            G.nodes[state]['peripheries'] = 2
 
-        dfa_delta = {}
-        for state, transitions in new_delta.items():
-            dfa_state = dfa_states[state]
-            for symbol, next_state in transitions.items():
-                dfa_next_state = dfa_states[next_state]
-                dfa_delta[dfa_state, symbol] = dfa_next_state
+        # Add edges to the graph
+        for (from_state, symbol), to_states in self.transitions.items():
+            for to_state in to_states:
+                G.add_edge(from_state, to_state, label=symbol)
 
-        dfa_q0 = dfa_states[s0]
+        # Set up positions for the nodes using networkx spring_layout
+        pos = nx.spring_layout(G, seed=42)
 
-        dfa_F = set()
-        for state in new_states:
-            for final_state in self.accept_states:
-                if final_state in state:
-                    dfa_F.add(dfa_states[state])
+        # Draw the graph using matplotlib
+        nx.draw_networkx_nodes(G, pos, node_size=1000, alpha=0.8)
+        nx.draw_networkx_edges(G, pos, width=2, alpha=0.8)
+        nx.draw_networkx_labels(G, pos, font_size=18, font_family='sans-serif')
+        edge_labels = {(u, v): d['label'] for u, v, d in G.edges(data=True)}
+        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=18, font_family='sans-serif')
+        plt.axis('off')
+        plt.show()
 
-        return FiniteAutomaton(new_states, self.alphabet, dfa_delta, dfa_q0, dfa_F)
 
-    def epsilon_closure(self, states):
-        closure = set(states)
-        new_states = set(states)
-        while new_states:
-            state = new_states.pop()
-            if (state, '') in self.transitions:
-                for next_state in self.transitions[(state, '')]:
-                    if next_state not in closure:
-                        closure.add(next_state)
-                        new_states.add(next_state)
-        return closure
+
 
     def __str__(self):
         s = "Finite Automaton:\n"
